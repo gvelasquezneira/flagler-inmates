@@ -2,8 +2,8 @@ name: Scrape and Deploy Flagler County Inmates
 
 on:
   schedule:
-    - cron: "0 14 * * *"  
-    - cron: "0 22 * * *"
+    - cron: "0 14 * * *"  # 9 AM EST (2 PM UTC)
+    - cron: "0 22 * * *"  # 5 PM EST (10 PM UTC)
   workflow_dispatch:
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
           
       - name: Run Flagler County scraper
         run: |
-          python scraper.py
+          python flagler_scraper.py
           
       - name: Verify database created
         run: |
@@ -49,7 +49,7 @@ jobs:
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
           git add volusia_inmates.db
-          git add -A  # Add any other changed files
+          git add -A
           git commit -m "Update Flagler County inmate database - $(date '+%Y-%m-%d %H:%M:%S') [skip ci]" || echo "No changes to commit"
           git push https://x:${{ secrets.PAT }}@github.com/gvelasquezneira/flagler_inmates.git || echo "No changes to push"
           
@@ -60,7 +60,7 @@ jobs:
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
           local-dir: ./
-          server-dir: /public_html/scraping_flag/
+          server-dir: /public_html/scraping/
           protocol: ftp
           port: 21
           exclude: |
@@ -88,25 +88,17 @@ jobs:
             echo "Files in current directory:"
             ls -la
             
-            # Check which Python is available
-            echo "Available Python versions:"
-            which python3 2>/dev/null || echo "python3 not found"
-            which python 2>/dev/null || echo "python not found"
-            ls -la /opt/alt/python*/bin/python* 2>/dev/null || echo "No alt python found"
+            # Use Python 3.11 which is available
+            PYTHON_CMD="/opt/alt/python311/bin/python3.11"
+            PIP_CMD="/opt/alt/python311/bin/pip3.11"
             
-            # Try to create virtual environment if it doesn't exist
+            echo "Using Python: $PYTHON_CMD"
+            echo "Using pip: $PIP_CMD"
+            
+            # Create virtual environment if it doesn't exist
             if [ ! -d "venv" ]; then
               echo "Creating virtual environment..."
-              # Try multiple Python paths
-              if [ -f "/opt/alt/python311/bin/python3" ]; then
-                /opt/alt/python311/bin/python3 -m venv venv
-              elif [ -f "/opt/alt/python39/bin/python3" ]; then
-                /opt/alt/python39/bin/python3 -m venv venv
-              elif [ -f "/usr/bin/python3" ]; then
-                /usr/bin/python3 -m venv venv
-              else
-                python3 -m venv venv
-              fi
+              $PYTHON_CMD -m venv venv
               echo "Virtual environment created"
             fi
             
@@ -114,10 +106,12 @@ jobs:
             if [ -f "venv/bin/activate" ]; then
               source venv/bin/activate
               echo "Activated virtual environment"
-              pip install --upgrade pip
+              
+              # Upgrade pip first
+              python -m pip install --upgrade pip
               
               # Install required packages
-              pip install flask flask-sqlalchemy sqlalchemy playwright
+              pip install flask flask-sqlalchemy sqlalchemy
               
               # Install from requirements.txt if it exists
               if [ -f "requirements.txt" ]; then
@@ -126,13 +120,14 @@ jobs:
               
               echo "Dependencies installed successfully"
             else
-              echo "WARNING: Virtual environment not found, installing globally"
-              pip3 install flask flask-sqlalchemy sqlalchemy
+              echo "WARNING: Virtual environment failed, trying global install"
+              # Try to install globally using the specific Python version
+              $PIP_CMD install flask flask-sqlalchemy sqlalchemy
             fi
             
-            # Create the main application file (app.py)
+            # Create the main application file
             echo "Creating application file..."
-            cat > app.py << 'EOF'
+            cat > app.py << 'APPEOF'
             import os
             import json
             import logging
@@ -141,12 +136,10 @@ jobs:
             from flask import Flask, render_template, request
             from sqlalchemy.exc import OperationalError
 
-            # Set up logging
             logging.basicConfig(level=logging.INFO)
             app = Flask(__name__)
             application = app
 
-            # Configure database
             db_path = os.path.abspath('volusia_inmates.db')
             app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
             app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -179,14 +172,12 @@ jobs:
                                               heading='Database Not Found',
                                               error_message='The database file is missing.')
 
-                    # Get search parameters
                     search_name = request.args.get('search_name', '').strip()
                     search_race = request.args.get('search_race', '').strip()
                     search_gender = request.args.get('search_gender', '').strip()
                     page = int(request.args.get('page', 1))
                     per_page = 50
 
-                    # Build query
                     query = "SELECT * FROM inmates WHERE 1=1"
                     params = []
 
@@ -204,11 +195,9 @@ jobs:
 
                     query += " ORDER BY booking_date DESC"
 
-                    # Get total count
                     count_query = query.replace("SELECT * FROM inmates", "SELECT COUNT(*) FROM inmates")
                     total_inmates = db.session.execute(text(count_query), params).scalar()
 
-                    # Add pagination
                     offset = (page - 1) * per_page
                     query += f" LIMIT {per_page} OFFSET {offset}"
 
@@ -240,7 +229,6 @@ jobs:
                         }
                         inmate_data.append(inmate)
 
-                    # Pagination info
                     total_pages = (total_inmates + per_page - 1) // per_page
                     has_prev = page > 1
                     has_next = page < total_pages
@@ -260,7 +248,7 @@ jobs:
                     app.logger.error(f"Error: {e}")
                     return render_template('error.html',
                                           heading='Error',
-                                          error_message='An error occurred while loading the data.')
+                                          error_message=f'An error occurred: {str(e)}')
 
             @app.route('/inmate/<int:inmate_id>')
             def inmate_detail(inmate_id):
@@ -300,11 +288,15 @@ jobs:
                     app.logger.error(f"Error: {e}")
                     return render_template('error.html',
                                           heading='Error',
-                                          error_message='An error occurred.')
+                                          error_message=f'An error occurred: {str(e)}')
 
             if __name__ == '__main__':
                 app.run(debug=False)
-            EOF
+            APPEOF
+            
+            # Create passenger_wsgi.py for deployment
+            cat > passenger_wsgi.py << 'WSGIEOF'
+            import sys, os
             
             VENV_PATH = os.path.join(os.getcwd(), 'venv', 'bin', 'python3')
             if os.path.exists(VENV_PATH) and sys.executable != VENV_PATH:
@@ -313,7 +305,6 @@ jobs:
                 except:
                     pass
             
-            # Add current directory to Python path
             sys.path.insert(0, os.getcwd())
             
             try:
@@ -325,24 +316,44 @@ jobs:
                 @application.route('/')
                 def error():
                     return f"Import Error: {str(e)}<br>Please check server configuration."
-            EOF
+            WSGIEOF
             
             echo "Application files created"
             
             # Verify database exists
             if [ -f "volusia_inmates.db" ]; then
               echo "Database file found"
-              # Check if we can query it
-              if command -v sqlite3 >/dev/null 2>&1; then
-                INMATE_COUNT=$(sqlite3 volusia_inmates.db "SELECT COUNT(*) FROM inmates;" 2>/dev/null || echo "0")
-                echo "Database contains $INMATE_COUNT inmates"
-              fi
+              echo "Database size: $(du -sh volusia_inmates.db)"
             else
               echo "WARNING: Database file not found!"
+              ls -la *.db 2>/dev/null || echo "No database files found"
             fi
             
-            # Create templates directory and basic error template
+            # Create templates directory
             mkdir -p templates
+            
+            # Create a basic error template if it doesn't exist
+            if [ ! -f "templates/error.html" ]; then
+              cat > templates/error.html << 'ERROREOF'
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Error</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 40px; }
+                    .error { background: #f8d7da; color: #721c24; padding: 20px; border-radius: 5px; }
+                </style>
+            </head>
+            <body>
+                <div class="error">
+                    <h1>{{ heading }}</h1>
+                    <p>{{ error_message }}</p>
+                    <a href="/">← Back to Search</a>
+                </div>
+            </body>
+            </html>
+            ERROREOF
+            fi
             
             # Restart the application
             mkdir -p tmp
@@ -352,7 +363,8 @@ jobs:
             # Final status
             echo "=== Deployment Summary ==="
             echo "Current directory: $(pwd)"
-            echo "Files deployed:"
+            echo "Python version: $($PYTHON_CMD --version 2>/dev/null || echo 'Python not found')"
+            echo "Files in directory:"
             ls -la *.py *.db 2>/dev/null || echo "Some files missing"
-            echo "Templates directory:"
-            ls -la templates/ 2>/dev/null || echo "Templates directory empty"
+            echo "Templates:"
+            ls -la templates/ 2>/dev/null || echo "No templates"
