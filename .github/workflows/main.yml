@@ -1,0 +1,358 @@
+name: Scrape and Deploy Flagler County Inmates
+
+on:
+  schedule:
+    - cron: "0 14 * * *"  
+    - cron: "0 22 * * *"
+  workflow_dispatch:
+
+jobs:
+  scrape-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright beautifulsoup4 flask flask-sqlalchemy sqlalchemy
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          
+      - name: Install Playwright browsers
+        run: |
+          python -m playwright install chromium
+          python -m playwright install-deps
+          
+      - name: Run Flagler County scraper
+        run: |
+          python scraper.py
+          
+      - name: Verify database created
+        run: |
+          if [ -f "volusia_inmates.db" ]; then
+            echo "Database file created successfully"
+            echo "Database size: $(du -sh volusia_inmates.db)"
+            sqlite3 volusia_inmates.db "SELECT COUNT(*) as total_inmates FROM inmates;"
+          else
+            echo "ERROR: Database file not found!"
+            exit 1
+          fi
+          
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+          git add volusia_inmates.db
+          git add -A  # Add any other changed files
+          git commit -m "Update Flagler County inmate database - $(date '+%Y-%m-%d %H:%M:%S') [skip ci]" || echo "No changes to commit"
+          git push https://x:${{ secrets.PAT }}@github.com/gvelasquezneira/flagler_inmates.git || echo "No changes to push"
+          
+      - name: Deploy to server
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.4
+        with:
+          server: server326.web-hosting.com
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: ./
+          server-dir: /public_html/scraping_flag/
+          protocol: ftp
+          port: 21
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+            **/.vscode/**
+            **/__pycache__/**
+            **/*.pyc
+            **/.pytest_cache/**
+            
+      - name: Restart Flask application
+        uses: appleboy/ssh-action@master
+        if: success()
+        with:
+          host: server326.web-hosting.com
+          port: 21098
+          username: ${{ secrets.SSH_USERNAME }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          script: |
+            cd /home/gvelkjyo/public_html/python/scraping/
+            echo "Setting up Flagler County inmate application..."
+            
+            # Check current directory contents
+            echo "Files in current directory:"
+            ls -la
+            
+            # Check which Python is available
+            echo "Available Python versions:"
+            which python3 2>/dev/null || echo "python3 not found"
+            which python 2>/dev/null || echo "python not found"
+            ls -la /opt/alt/python*/bin/python* 2>/dev/null || echo "No alt python found"
+            
+            # Try to create virtual environment if it doesn't exist
+            if [ ! -d "venv" ]; then
+              echo "Creating virtual environment..."
+              # Try multiple Python paths
+              if [ -f "/opt/alt/python311/bin/python3" ]; then
+                /opt/alt/python311/bin/python3 -m venv venv
+              elif [ -f "/opt/alt/python39/bin/python3" ]; then
+                /opt/alt/python39/bin/python3 -m venv venv
+              elif [ -f "/usr/bin/python3" ]; then
+                /usr/bin/python3 -m venv venv
+              else
+                python3 -m venv venv
+              fi
+              echo "Virtual environment created"
+            fi
+            
+            # Activate virtual environment and install dependencies
+            if [ -f "venv/bin/activate" ]; then
+              source venv/bin/activate
+              echo "Activated virtual environment"
+              pip install --upgrade pip
+              
+              # Install required packages
+              pip install flask flask-sqlalchemy sqlalchemy playwright
+              
+              # Install from requirements.txt if it exists
+              if [ -f "requirements.txt" ]; then
+                pip install -r requirements.txt
+              fi
+              
+              echo "Dependencies installed successfully"
+            else
+              echo "WARNING: Virtual environment not found, installing globally"
+              pip3 install flask flask-sqlalchemy sqlalchemy
+            fi
+            
+            # Create the main application file (app.py)
+            echo "Creating application file..."
+            cat > app.py << 'EOF'
+            import os
+            import json
+            import logging
+            from sqlalchemy import Column, String, Integer, text
+            from flask_sqlalchemy import SQLAlchemy
+            from flask import Flask, render_template, request
+            from sqlalchemy.exc import OperationalError
+
+            # Set up logging
+            logging.basicConfig(level=logging.INFO)
+            app = Flask(__name__)
+            application = app
+
+            # Configure database
+            db_path = os.path.abspath('volusia_inmates.db')
+            app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
+            app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+            db = SQLAlchemy()
+            db.init_app(app)
+
+            class Inmate(db.Model):
+                __tablename__ = 'inmates'
+                id = Column(Integer, primary_key=True)
+                booking_num = Column(String, unique=True)
+                inmate_id = Column(String)
+                last_name = Column(String)
+                first_name = Column(String)
+                middle_name = Column(String)
+                suffix = Column(String)
+                sex = Column(String)
+                race = Column(String)
+                booking_date = Column(String)
+                release_date = Column(String)
+                in_custody = Column(String)
+                photo_link = Column(String)
+                charges = Column(String)
+
+            @app.route('/')
+            def index():
+                try:
+                    if not os.path.exists('volusia_inmates.db'):
+                        return render_template('error.html',
+                                              heading='Database Not Found',
+                                              error_message='The database file is missing.')
+
+                    # Get search parameters
+                    search_name = request.args.get('search_name', '').strip()
+                    search_race = request.args.get('search_race', '').strip()
+                    search_gender = request.args.get('search_gender', '').strip()
+                    page = int(request.args.get('page', 1))
+                    per_page = 50
+
+                    # Build query
+                    query = "SELECT * FROM inmates WHERE 1=1"
+                    params = []
+
+                    if search_name:
+                        query += " AND (last_name LIKE ? OR first_name LIKE ?)"
+                        params.extend([f'%{search_name}%', f'%{search_name}%'])
+
+                    if search_race:
+                        query += " AND race LIKE ?"
+                        params.append(f'%{search_race}%')
+
+                    if search_gender:
+                        query += " AND sex LIKE ?"
+                        params.append(f'%{search_gender}%')
+
+                    query += " ORDER BY booking_date DESC"
+
+                    # Get total count
+                    count_query = query.replace("SELECT * FROM inmates", "SELECT COUNT(*) FROM inmates")
+                    total_inmates = db.session.execute(text(count_query), params).scalar()
+
+                    # Add pagination
+                    offset = (page - 1) * per_page
+                    query += f" LIMIT {per_page} OFFSET {offset}"
+
+                    inmates = db.session.execute(text(query), params).all()
+                    inmate_data = []
+
+                    for row in inmates:
+                        try:
+                            charges = json.loads(row.charges) if row.charges else []
+                        except:
+                            charges = []
+
+                        inmate = {
+                            'id': row.id,
+                            'booking_num': row.booking_num,
+                            'inmate_id': row.inmate_id,
+                            'last_name': row.last_name,
+                            'first_name': row.first_name,
+                            'middle_name': row.middle_name,
+                            'suffix': row.suffix,
+                            'sex': row.sex,
+                            'race': row.race,
+                            'booking_date': row.booking_date,
+                            'release_date': row.release_date,
+                            'in_custody': row.in_custody,
+                            'photo_link': row.photo_link,
+                            'charges': charges,
+                            'charge_count': len(charges)
+                        }
+                        inmate_data.append(inmate)
+
+                    # Pagination info
+                    total_pages = (total_inmates + per_page - 1) // per_page
+                    has_prev = page > 1
+                    has_next = page < total_pages
+
+                    return render_template('index.html', 
+                                         inmates=inmate_data,
+                                         search_name=search_name,
+                                         search_race=search_race,
+                                         search_gender=search_gender,
+                                         page=page,
+                                         total_pages=total_pages,
+                                         has_prev=has_prev,
+                                         has_next=has_next,
+                                         total_inmates=total_inmates)
+
+                except Exception as e:
+                    app.logger.error(f"Error: {e}")
+                    return render_template('error.html',
+                                          heading='Error',
+                                          error_message='An error occurred while loading the data.')
+
+            @app.route('/inmate/<int:inmate_id>')
+            def inmate_detail(inmate_id):
+                try:
+                    inmate = db.session.execute(text("SELECT * FROM inmates WHERE id = ?"), [inmate_id]).first()
+                    
+                    if not inmate:
+                        return render_template('error.html',
+                                              heading='Inmate Not Found',
+                                              error_message='The requested inmate could not be found.')
+
+                    try:
+                        charges = json.loads(inmate.charges) if inmate.charges else []
+                    except:
+                        charges = []
+
+                    inmate_data = {
+                        'id': inmate.id,
+                        'booking_num': inmate.booking_num,
+                        'inmate_id': inmate.inmate_id,
+                        'last_name': inmate.last_name,
+                        'first_name': inmate.first_name,
+                        'middle_name': inmate.middle_name,
+                        'suffix': inmate.suffix,
+                        'sex': inmate.sex,
+                        'race': inmate.race,
+                        'booking_date': inmate.booking_date,
+                        'release_date': inmate.release_date,
+                        'in_custody': inmate.in_custody,
+                        'photo_link': inmate.photo_link,
+                        'charges': charges
+                    }
+
+                    return render_template('inmate_detail.html', inmate=inmate_data)
+
+                except Exception as e:
+                    app.logger.error(f"Error: {e}")
+                    return render_template('error.html',
+                                          heading='Error',
+                                          error_message='An error occurred.')
+
+            if __name__ == '__main__':
+                app.run(debug=False)
+            EOF
+            
+            VENV_PATH = os.path.join(os.getcwd(), 'venv', 'bin', 'python3')
+            if os.path.exists(VENV_PATH) and sys.executable != VENV_PATH:
+                try:
+                    os.execl(VENV_PATH, VENV_PATH, *sys.argv)
+                except:
+                    pass
+            
+            # Add current directory to Python path
+            sys.path.insert(0, os.getcwd())
+            
+            try:
+                from app import application
+            except ImportError as e:
+                from flask import Flask
+                application = Flask(__name__)
+                
+                @application.route('/')
+                def error():
+                    return f"Import Error: {str(e)}<br>Please check server configuration."
+            EOF
+            
+            echo "Application files created"
+            
+            # Verify database exists
+            if [ -f "volusia_inmates.db" ]; then
+              echo "Database file found"
+              # Check if we can query it
+              if command -v sqlite3 >/dev/null 2>&1; then
+                INMATE_COUNT=$(sqlite3 volusia_inmates.db "SELECT COUNT(*) FROM inmates;" 2>/dev/null || echo "0")
+                echo "Database contains $INMATE_COUNT inmates"
+              fi
+            else
+              echo "WARNING: Database file not found!"
+            fi
+            
+            # Create templates directory and basic error template
+            mkdir -p templates
+            
+            # Restart the application
+            mkdir -p tmp
+            touch tmp/restart.txt
+            echo "Application restarted successfully"
+            
+            # Final status
+            echo "=== Deployment Summary ==="
+            echo "Current directory: $(pwd)"
+            echo "Files deployed:"
+            ls -la *.py *.db 2>/dev/null || echo "Some files missing"
+            echo "Templates directory:"
+            ls -la templates/ 2>/dev/null || echo "Templates directory empty"
