@@ -31,7 +31,7 @@ jobs:
           
       - name: Run Flagler County scraper
         run: |
-          python flagler_scraper.py
+          python scraper.py
           
       - name: Verify database created
         run: |
