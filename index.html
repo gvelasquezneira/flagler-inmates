@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flagler County Inmates</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .card-zoom:hover img {
+            transform: scale(1.1);
+        }
+        .badge-custody-yes {
+            background-color: #166534;
+        }
+        .badge-custody-no {
+            background-color: #991b1b;
+        }
+        .charge-list li:nth-child(odd) {
+            background-color: rgba(243, 244, 246, 0.7);
+        }
+        .charge-container {
+            max-height: 300px;
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(156, 163, 175, 0.5) rgba(243, 244, 246, 0.7);
+        }
+        .charge-container::-webkit-scrollbar {
+            width: 6px;
+        }
+        .charge-container::-webkit-scrollbar-track {
+            background: rgba(243, 244, 246, 0.7);
+        }
+        .charge-container::-webkit-scrollbar-thumb {
+            background-color: rgba(156, 163, 175, 0.5);
+            border-radius: 20px;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-gray-50 to-blue-50 min-h-screen">
+    <header class="bg-gradient-to-r from-blue-800 to-indigo-900 text-white shadow-lg">
+        <div class="container mx-auto py-8 px-4">
+            <div class="flex flex-col md:flex-row justify-between items-center">
+                <div>
+                    <h1 class="text-4xl font-bold mb-2 flex items-center">
+                        <i class="fas fa-shield-alt mr-3"></i>
+                        Flagler County Inmate Records
+                    </h1>
+                    <p class="text-blue-100 font-light">Public database of recent bookings and inmate information</p>
+                </div>
+                <div class="mt-4 md:mt-0">
+                    <!-- Search form moved to main content area -->
+                </div>
+            </div>
+        </div>
+    </header>
+    
+    <div class="container mx-auto p-6" x-data="{ searchTerm: '', filterCustody: 'all' }">
+        <!-- Search and Filter Section -->
+        <div class="mb-8 bg-white rounded-xl shadow-md p-6">
+            <form method="GET" action="/" class="space-y-4">
+                <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+                    <div class="relative flex-grow">
+                        <label for="search_name" class="block text-sm font-medium text-gray-700 mb-1">Search by Name</label>
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none" style="top: 24px;">
+                            <i class="fas fa-search text-gray-400"></i>
+                        </div>
+                        <input
+                            type="text"
+                            id="search_name"
+                            name="search_name"
+                            value="{{ search_name }}"
+                            placeholder="Search by first or last name..."
+                            class="pl-10 pr-4 py-3 w-full rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                        >
+                    </div>
+                    
+                    <div class="flex gap-4">
+                        <div>
+                            <label for="search_race" class="block text-sm font-medium text-gray-700 mb-1">Race</label>
+                            <select name="search_race" id="search_race" class="px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
+                                <option value="">All Races</option>
+                                <option value="WHITE" {{ 'selected' if search_race == 'WHITE' }}>White</option>
+                                <option value="BLACK" {{ 'selected' if search_race == 'BLACK' }}>Black/African American</option>
+                                <option value="HISPANIC" {{ 'selected' if search_race == 'HISPANIC' }}>Hispanic</option>
+                                <option value="ASIAN" {{ 'selected' if search_race == 'ASIAN' }}>Asian</option>
+                                <option value="UNKNOWN" {{ 'selected' if search_race == 'UNKNOWN' }}>Unknown</option>
+                            </select>
+                        </div>
+                        
+                        <div>
+                            <label for="search_gender" class="block text-sm font-medium text-gray-700 mb-1">Gender</label>
+                            <select name="search_gender" id="search_gender" class="px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
+                                <option value="">All Genders</option>
+                                <option value="Male" {{ 'selected' if search_gender == 'Male' }}>Male</option>
+                                <option value="Female" {{ 'selected' if search_gender == 'Female' }}>Female</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="flex gap-2">
+                        <button type="submit" class="px-6 py-3 bg-blue-700 text-white rounded-lg font-medium hover:bg-blue-800 transition-colors">
+                            <i class="fas fa-search mr-2"></i>Search
+                        </button>
+                        <a href="/" class="px-6 py-3 bg-gray-200 text-gray-700 rounded-lg font-medium hover:bg-gray-300 transition-colors">
+                            Clear
+                        </a>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        {% if inmates %}
+        <!-- Info Section -->
+        <div class="grid grid-cols-1 mb-8">
+            <div class="bg-white rounded-xl shadow-md p-6">
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4 flex items-center">
+                    <i class="fas fa-info-circle text-blue-600 mr-2"></i>
+                    About This Data
+                </h2>
+                <p class="text-gray-600 mb-4">
+                    This information is sourced from the Flagler County Sheriff's Office public records.
+                    The data is updated regularly and represents recent bookings and inmate information.
+                    Showing {{ inmates|length }} of {{ total_inmates }} inmates (Page {{ page }} of {{ total_pages }}).
+                </p>
+                <div class="flex items-center text-sm text-gray-500">
+                    <i class="fas fa-sync-alt mr-2"></i>
+                    <span>Last updated: <span id="last-updated-time">Today</span></span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Inmates List -->
+        <div class="grid grid-cols-1 gap-6">
+            {% for inmate in inmates %}
+            <div class="bg-white rounded-xl shadow-md overflow-hidden">
+                <div class="p-6">
+                    <div class="flex flex-col md:flex-row gap-6">
+                        <!-- Inmate Info -->
+                        <div class="flex-grow">
+                            <div class="flex flex-col md:flex-row md:items-center justify-between mb-4">
+                                <h2 class="text-2xl font-bold text-gray-800">
+                                    <a href="/inmate/{{ inmate.id }}" class="hover:text-blue-600 transition-colors">
+                                        {{ inmate.last_name | default('N/A') }}{% if inmate.first_name %}, {{ inmate.first_name }}{% endif %}
+                                        {% if inmate.middle_name %} {{ inmate.middle_name }}{% endif %}
+                                        {% if inmate.suffix %} {{ inmate.suffix }}{% endif %}
+                                    </a>
+                                </h2>
+                                {% if inmate.in_custody == 'Yes' %}
+                                <span class="inline-flex items-center px-4 py-2 rounded-full text-sm font-medium bg-green-100 text-green-800 mt-2 md:mt-0">
+                                    <i class="fas fa-lock mr-2"></i> In Custody
+                                </span>
+                                {% else %}
+                                <span class="inline-flex items-center px-4 py-2 rounded-full text-sm font-medium bg-red-100 text-red-800 mt-2 md:mt-0">
+                                    <i class="fas fa-lock-open mr-2"></i> Released
+                                </span>
+                                {% endif %}
+                            </div>
+                            
+                            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-3 mb-6">
+                                <div>
+                                    <span class="text-sm text-gray-500">Booking #</span>
+                                    <div class="font-mono text-lg font-semibold text-blue-700">{{ inmate.booking_num | default('N/A') }}</div>
+                                </div>
+                                <div>
+                                    <span class="text-sm text-gray-500">Subject ID</span>
+                                    <div class="font-mono text-lg">{{ inmate.inmate_id | default('N/A') }}</div>
+                                </div>
+                                <div>
+                                    <span class="text-sm text-gray-500">Demographic</span>
+                                    <div class="flex items-center space-x-2 mt-1">
+                                        <span class="inline-block bg-blue-100 text-blue-800 text-sm px-3 py-1 rounded-full">
+                                            <i class="fas fa-venus-mars mr-1"></i> {{ inmate.sex }}
+                                        </span>
+                                        <span class="inline-block bg-blue-100 text-blue-800 text-sm px-3 py-1 rounded-full">
+                                            <i class="fas fa-user mr-1"></i> {{ inmate.race }}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div>
+                                    <span class="text-sm text-gray-500">Booking Date</span>
+                                    <div>{{ inmate.booking_date | default('N/A') }}</div>
+                                </div>
+                                <div>
+                                    <span class="text-sm text-gray-500">Release Date</span>
+                                    <div>{{ inmate.release_date | default('N/A') }}</div>
+                                </div>
+                                <div>
+                                    <span class="text-sm text-gray-500">Charges</span>
+                                    <div class="flex items-center">
+                                        <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-purple-100 text-purple-800">
+                                            <i class="fas fa-balance-scale mr-1"></i>
+                                            {{ inmate.charge_count }} Charge{% if inmate.charge_count != 1 %}s{% endif %}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Charges Section -->
+                    {% if inmate.charges %}
+                    <div class="mt-6">
+                        <h3 class="text-lg font-semibold text-gray-800 mb-3 flex items-center">
+                            <i class="fas fa-gavel text-blue-600 mr-2"></i>
+                            Charges Information
+                        </h3>
+                        <div class="bg-gray-50 rounded-lg p-4 shadow-inner border border-gray-200 charge-container">
+                            <ul class="divide-y divide-gray-200 charge-list">
+                                {% for charge in inmate.charges %}
+                                <li class="py-3 px-2 rounded-md">
+                                    <div class="flex">
+                                        <span class="h-6 w-6 flex-shrink-0 flex items-center justify-center bg-blue-600 text-white text-xs font-semibold rounded-full">
+                                            {{ charge.seq_number | default(loop.index) }}
+                                        </span>
+                                        <div class="ml-3 flex-grow">
+                                            <div class="font-medium text-gray-800">{{ charge.charge_description | default('N/A') }}</div>
+                                            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1 text-sm text-gray-600 mt-2">
+                                                {% if charge.crime_class %}
+                                                <span class="flex items-center">
+                                                    <i class="fas fa-tag text-xs mr-1"></i>
+                                                    <span class="font-medium mr-1">Class:</span> {{ charge.crime_class }}
+                                                </span>
+                                                {% endif %}
+                                                {% if charge.counts %}
+                                                <span class="flex items-center">
+                                                    <i class="fas fa-hashtag text-xs mr-1"></i>
+                                                    <span class="font-medium mr-1">Counts:</span> {{ charge.counts }}
+                                                </span>
+                                                {% endif %}
+                                                {% if charge.offense_date %}
+                                                <span class="flex items-center">
+                                                    <i class="fas fa-calendar text-xs mr-1"></i>
+                                                    <span class="font-medium mr-1">Offense:</span> {{ charge.offense_date }}
+                                                </span>
+                                                {% endif %}
+                                                {% if charge.disposition %}
+                                                <span class="flex items-center">
+                                                    <i class="fas fa-gavel text-xs mr-1"></i>
+                                                    <span class="font-medium mr-1">Disposition:</span> {{ charge.disposition }}
+                                                </span>
+                                                {% endif %}
+                                                {% if charge.docket_number %}
+                                                <span class="flex items-center">
+                                                    <i class="fas fa-file-alt text-xs mr-1"></i>
+                                                    <span class="font-medium mr-1">Docket:</span> {{ charge.docket_number }}
+                                                </span>
+                                                {% endif %}
+                                                {% if charge.arresting_agencies %}
+                                                <span class="flex items-center">
+                                                    <i class="fas fa-shield-alt text-xs mr-1"></i>
+                                                    <span class="font-medium mr-1">Agency:</span> {{ charge.arresting_agencies }}
+                                                </span>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </li>
+                                {% endfor %}
+                            </ul>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Pagination -->
+        {% if total_pages > 1 %}
+        <div class="mt-8 flex justify-center">
+            <nav class="flex items-center space-x-2">
+                {% if has_prev %}
+                <a href="?page={{ page - 1 }}&search_name={{ search_name }}&search_race={{ search_race }}&search_gender={{ search_gender }}" 
+                   class="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                    <i class="fas fa-chevron-left mr-1"></i> Previous
+                </a>
+                {% endif %}
+
+                {% for p in range(1, total_pages + 1) %}
+                    {% if p == page %}
+                    <span class="px-4 py-2 bg-blue-600 text-white rounded-lg font-medium">{{ p }}</span>
+                    {% elif p <= 3 or p > total_pages - 3 or (p >= page - 2 and p <= page + 2) %}
+                    <a href="?page={{ p }}&search_name={{ search_name }}&search_race={{ search_race }}&search_gender={{ search_gender }}" 
+                       class="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">{{ p }}</a>
+                    {% elif p == 4 or p == total_pages - 3 %}
+                    <span class="px-4 py-2 text-gray-500">...</span>
+                    {% endif %}
+                {% endfor %}
+
+                {% if has_next %}
+                <a href="?page={{ page + 1 }}&search_name={{ search_name }}&search_race={{ search_race }}&search_gender={{ search_gender }}" 
+                   class="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                    Next <i class="fas fa-chevron-right ml-1"></i>
+                </a>
+                {% endif %}
+            </nav>
+        </div>
+        {% endif %}
+
+        {% else %}
+        <!-- No Results -->
+        <div class="text-center bg-white p-10 rounded-xl shadow-md">
+            <div class="text-8xl text-gray-300 mb-4">
+                <i class="fas fa-database"></i>
+            </div>
+            <h2 class="text-2xl font-semibold text-gray-700 mb-3">No Inmate Records Found</h2>
+            <p class="text-lg text-gray-600 max-w-lg mx-auto mb-6">
+                {% if search_name or search_race or search_gender %}
+                No inmates match your search criteria. Try adjusting your filters or clearing them.
+                {% else %}
+                The inmate database appears to be empty. Please ensure the data scraping script has been run successfully.
+                {% endif %}
+            </p>
+            <div class="bg-blue-50 border-l-4 border-blue-500 p-4 text-blue-700 text-sm rounded-md inline-block">
+                <div class="flex">
+                    <i class="fas fa-info-circle mt-0.5 mr-2"></i>
+                    <div>
+                        <p class="font-medium">Run the data collection script first</p>
+                        <p class="mt-1">This interface relies on data collected from the Flagler County inmate records.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    
+    <footer class="bg-gray-800 text-gray-300 mt-12">
+        <div class="container mx-auto py-8 px-6">
+            <div class="flex flex-col justify-between items-center">
+                <div class="mb-4 md:mb-0">
+                    <h2 class="text-xl font-semibold text-white">Flagler County Inmate Records</h2>
+                </div>
+            </div>
+            <div class="mt-8 pt-6 border-t border-gray-700 text-sm text-gray-500 text-center">
+                <p>Data displayed on this site is public information sourced from the Flagler County Sheriff's Office.</p>
+                <p class="mt-2">© 2025 Inmate Records Viewer. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>
